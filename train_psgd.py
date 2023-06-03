@@ -89,7 +89,6 @@ parser.add_argument('--smalldatasets', default=None, type=float, dest='smalldata
                     help='percent of small datasets')
 
 ## arguments for learning with differential privacy
-parser.add_argument('--private', '-p', action='store_true', help='enable differential privacy')
 parser.add_argument('--eps', default=8., type=float, help='privacy parameter epsilon')
 parser.add_argument('--delta', default=1e-5, type=float, help='desired delta')
 parser.add_argument('--clip', default=5, type=float, help="clipping the threshold for low dimensional gradient")

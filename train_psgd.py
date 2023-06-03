@@ -278,7 +278,7 @@ def train(train_loader, model, criterion, optimizer, epoch, noise_multiplier, cl
             loss.backward()
 
         # Do P_plus_BFGS update
-        gk = get_model_grad_vec(model)
+        gk = get_model_grad_vec_batch(model)
         P_SGD_DP(model, optimizer, gk, loss.item(), input_var, target_var, noise_multiplier=noise_multiplier, clip=clip)
 
         # Measure accuracy and record loss

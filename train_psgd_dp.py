@@ -19,7 +19,12 @@ from numpy import linalg as LA
 import pickle
 import random
 import resnet
-from utils import get_datasets, get_model
+from utils import get_datasets, get_model, get_sigma
+
+
+#package for computing individual gradients
+from backpack import backpack, extend
+from backpack.extensions import BatchGrad
 
 def set_seed(seed=233): 
     random.seed(seed)
@@ -83,6 +88,11 @@ parser.add_argument('--corrupt', default=0, type=float,
 parser.add_argument('--smalldatasets', default=None, type=float, dest='smalldatasets', 
                     help='percent of small datasets')
 
+## arguments for learning with differential privacy
+parser.add_argument('--eps', default=8., type=float, help='privacy parameter epsilon')
+parser.add_argument('--delta', default=1e-5, type=float, help='desired delta')
+parser.add_argument('--clip', default=5, type=float, help="clipping the threshold for low dimensional gradient")
+
 args = parser.parse_args()
 set_seed(args.randomseed)
 best_prec1 = 0
@@ -105,6 +115,14 @@ def get_model_grad_vec(model):
     for name,param in model.named_parameters():
         vec.append(param.grad.detach().reshape(-1))
     return torch.cat(vec, 0)
+
+def get_model_grad_vec_batch(model):
+    # Return the model grad as a vector
+
+    vec = []
+    for name,param in model.named_parameters():
+        vec.append(param.grad_batch.reshape(param.grad_batch.shape[0], -1))
+    return torch.cat(vec, 1)
 
 def update_grad(model, grad_vec):
     idx = 0
@@ -138,6 +156,7 @@ def main():
     # Define model
     model = torch.nn.DataParallel(get_model(args))
     model.cuda()
+    model = extend(model)
 
     # Load sampled model parameters
     print ('params: from', args.params_start, 'to', args.params_end)
@@ -167,7 +186,8 @@ def main():
     train_loader, val_loader = get_datasets(args)
     
     # Define loss function (criterion) and optimizer
-    criterion = nn.CrossEntropyLoss().cuda()
+    criterion = nn.CrossEntropyLoss(reduction='sum').cuda()
+    criterion = extend(criterion)
     if args.half:
         model.half()
         criterion.half()
@@ -182,12 +202,25 @@ def main():
         validate(val_loader, model, criterion)
         return
 
+    # DP
+    print('==> Computing noise scale for privacy budget ({:.1f}, {:f})-DP'.format(args.eps, args.delta))
+    sampling_prob = 1 / len(train_loader)
+    total_steps = int(args.epochs / sampling_prob)
+    sigma, eps = get_sigma(sampling_prob, total_steps, args.eps, args.delta, rgp=False)
+    noise_multiplier = sigma
+    print("noise scale for low-dimensional gradient: ", sigma, "\n privacy guarantee: ", eps)
+
+
+
+
+    
+
     print ('Train:', (args.start_epoch, args.epochs))
     end = time.time()
     p0 = get_model_param_vec(model)
     for epoch in range(args.start_epoch, args.epochs):
         # Train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch)
+        train(train_loader, model, criterion, optimizer, epoch, noise_multiplier, args.clip)
         # Bk = torch.eye(args.n_components).cuda()
         lr_scheduler.step()
 
@@ -210,7 +243,7 @@ def main():
 
 running_grad = 0
 
-def train(train_loader, model, criterion, optimizer, epoch):
+def train(train_loader, model, criterion, optimizer, epoch, noise_multiplier, clip):
     # Run one train epoch
 
     global P, W, iters, T, train_loss, train_acc, search_times, running_grad, p0
@@ -242,11 +275,12 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
         # Compute gradient and do SGD step
         optimizer.zero_grad()
-        loss.backward()
+        with backpack(BatchGrad()):
+            loss.backward()
 
         # Do P_plus_BFGS update
-        gk = get_model_grad_vec(model)
-        P_SGD(model, optimizer, gk, loss.item(), input_var, target_var)
+        gk = get_model_grad_vec_batch(model)
+        P_SGD_DP(model, optimizer, gk, loss.item(), input_var, target_var, noise_multiplier=noise_multiplier, clip=clip)
 
         # Measure accuracy and record loss
         prec1 = accuracy(output.data, target)[0]
@@ -303,6 +337,64 @@ def P_SGD(model, optimizer, grad, oldf, X, y):
 
     # Update the model grad and do a step
     update_grad(model, grad_proj)
+    optimizer.step()
+
+
+def clip_column(tsr, clip=1.0, inplace=True):
+    if(inplace):
+        inplace_clipping(tsr, torch.tensor(clip).cuda())
+    else:
+        norms = torch.norm(tsr, dim=1)
+
+        scale = torch.clamp(clip/norms, max=1.0)
+        return tsr * scale.view(-1, 1) 
+
+@torch.jit.script
+def inplace_clipping(matrix, clip):
+    n, m = matrix.shape
+    for i in range(n):
+        # Normalize the i'th row
+        col = matrix[i:i+1, :]
+        col_norm = torch.sqrt(torch.sum(col ** 2))     
+        if(col_norm > clip):
+            col /= (col_norm/clip)
+
+def P_SGD_DP(model, optimizer, grad, oldf, X, y, noise_multiplier, clip):
+    # P_plus_BFGS algorithm
+
+    global rho, sigma, Bk, sk, gk_last, grad_res_momentum, gamma, alpha, search_times
+
+    selected_bases = P.T
+    selected_bases_T = P
+
+    embedding = torch.matmul(grad, selected_bases)
+
+
+    cur_approx = torch.matmul(torch.mean(embedding, dim=0).view(1, -1), selected_bases_T).view(-1)
+    cur_target = torch.mean(grad, dim=0)
+    cur_error = torch.sum(torch.square(cur_approx - cur_target)) / torch.sum(torch.square(cur_target))
+
+    print("approx error: {:.2f}".format(100 * cur_error.item()))
+
+    clipped_embedding = clip_column(embedding, clip=clip, inplace=False)
+
+    norms = torch.norm(clipped_embedding, dim=1)
+    print('average norm of clipped embedding: ', torch.mean(norms).item(), 'max norm: ', torch.max(norms).item(), 'median norm: ', torch.median(norms).item())
+
+    avg_clipped_embedding = torch.sum(clipped_embedding, dim=0) / embedding.shape[0]
+
+    clipped_theta = avg_clipped_embedding.view(-1)
+
+    theta_noise = torch.normal(0, noise_multiplier * clip / embedding.shape[0], size=clipped_embedding.shape, device= clipped_theta.device)
+
+    clipped_theta += theta_noise
+
+    noisy_grad = torch.matmul(clipped_theta.view(1, -1), selected_bases_T)
+
+    
+
+    # Update the model grad and do a step
+    update_grad(model, noisy_grad)
     optimizer.step()
 
 def validate(val_loader, model, criterion):

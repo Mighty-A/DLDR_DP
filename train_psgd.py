@@ -203,7 +203,7 @@ def main():
 
     # DP
     print('==> Computing noise scale for privacy budget (%.1f, %f)-DP'.format(args.eps, args.delta))
-    sampling_prob = args.batch_size / len(train_loader)
+    sampling_prob = 1 / len(train_loader)
     total_steps = int(args.epochs / sampling_prob)
     sigma, eps = get_sigma(sampling_prob, total_steps, args.eps, args.delta, rgp=False)
     noise_multiplier = sigma

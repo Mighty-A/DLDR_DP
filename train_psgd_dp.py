@@ -385,7 +385,7 @@ def P_SGD_DP(model, optimizer, grad, oldf, X, y, noise_multiplier, clip):
 
     clipped_theta = avg_clipped_embedding.view(-1)
 
-    theta_noise = torch.normal(0, noise_multiplier * clip / embedding.shape[0], size=clipped_embedding.shape, device= clipped_theta.device)
+    theta_noise = torch.normal(0, noise_multiplier * clip / embedding.shape[0], size=clipped_theta.shape, device= clipped_theta.device)
 
     clipped_theta += theta_noise
 

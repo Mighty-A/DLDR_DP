@@ -242,7 +242,7 @@ def main():
 
 running_grad = 0
 
-def train(train_loader, model, criterion, optimizer, epoch, noise_multiplier, clip=clip):
+def train(train_loader, model, criterion, optimizer, epoch, noise_multiplier, clip):
     # Run one train epoch
 
     global P, W, iters, T, train_loss, train_acc, search_times, running_grad, p0

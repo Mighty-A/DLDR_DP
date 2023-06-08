@@ -138,7 +138,7 @@ def main():
     
     if args.datasets == 'CIFAR10':
         lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
-                                                            milestones=[100, 150], last_epoch=args.start_epoch - 1)
+                                                            milestones=[50, 100, 150], last_epoch=args.start_epoch - 1)
                                                             
     elif args.datasets == 'CIFAR100':
         lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,

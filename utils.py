@@ -454,6 +454,7 @@ def get_model(args):
 
 
 def loop_for_sigma(q, T, eps, delta, cur_sigma, interval, rdp_orders=32, rgp=True):
+    previous_eps = 0
     while True:
         orders = np.arange(2, rdp_orders, 0.1)
         steps = T

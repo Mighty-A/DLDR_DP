@@ -280,7 +280,7 @@ def train(train_loader, model, criterion, optimizer, epoch, noise_multiplier, cl
 
         # Do P_plus_BFGS update
         gk = get_model_grad_vec_batch(model)
-        P_SGD_DP(model, optimizer, gk, loss.item(), input_var, target_var, noise_multiplier=noise_multiplier, clip=clip)
+        org_norms_stat, clipped_norms_stat = P_SGD_DP(model, optimizer, gk, loss.item(), input_var, target_var, noise_multiplier=noise_multiplier, clip=clip)
 
         # Measure accuracy and record loss
         prec1 = accuracy(output.data, target)[0]
@@ -299,7 +299,11 @@ def train(train_loader, model, criterion, optimizer, epoch, noise_multiplier, cl
                   'Prec@1 {top1.val:.3f} ({top1.avg:.3f})'.format(
                       epoch, i, len(train_loader), batch_time=batch_time,
                       data_time=data_time, loss=losses, top1=top1))
-        
+            print("low dimensional original norms: mean: {:.2f} max: {:.2f}, median: {:2f}".format(org_norms_stat[0], org_norms_stat[1], org_norms_stat[2]))
+
+            print("low dimensional clipped norms: mean: {:.2f} max: {:.2f}, median: {:2f}".format(clipped_norms_stat[0], clipped_norms_stat[1], clipped_norms_stat[2]))
+
+
     train_loss.append(losses.avg)
     train_acc.append(top1.avg)
 
@@ -374,12 +378,18 @@ def P_SGD_DP(model, optimizer, grad, oldf, X, y, noise_multiplier, clip):
     cur_target = torch.mean(grad, dim=0)
     cur_error = torch.sum(torch.square(cur_approx - cur_target)) / torch.sum(torch.square(cur_target))
 
-    print("approx error: {:.2f}".format(100 * cur_error.item()))
+    embedding_norms = torch.norm(embedding, dim=1)
+
+    org_norms_stat = [torch.mean(embedding_norms).item(), torch.max(embedding_norms).item(), torch.median(embedding_norms).item()]
+
+    # print("approx error: {:.2f}".format(100 * cur_error.item()))
 
     clipped_embedding = clip_column(embedding, clip=clip, inplace=False)
 
-    norms = torch.norm(clipped_embedding, dim=1)
-    print('average norm of clipped embedding: ', torch.mean(norms).item(), 'max norm: ', torch.max(norms).item(), 'median norm: ', torch.median(norms).item())
+    clipped_norms = torch.norm(clipped_embedding, dim=1)
+
+    clipped_norms_stat =  [torch.mean(clipped_norms).item(), torch.max(clipped_norms).item(), torch.median(clipped_norms).item()]
+    # print('average norm of clipped embedding: ', torch.mean(norms).item(), 'max norm: ', torch.max(norms).item(), 'median norm: ', torch.median(norms).item())
 
     avg_clipped_embedding = torch.sum(clipped_embedding, dim=0) / embedding.shape[0]
 
@@ -389,13 +399,15 @@ def P_SGD_DP(model, optimizer, grad, oldf, X, y, noise_multiplier, clip):
 
     clipped_theta += theta_noise
 
-    noisy_grad = torch.matmul(clipped_theta.view(1, -1), selected_bases_T)
+    noisy_grad = torch.matmul(clipped_theta.view(1, -1), selected_bases_T).reshape(-1)
 
     
-
+    # print(noisy_grad.shape)
     # Update the model grad and do a step
     update_grad(model, noisy_grad)
     optimizer.step()
+
+    return org_norms_stat, clipped_norms_stat
 
 def validate(val_loader, model, criterion):
     # Run evaluation

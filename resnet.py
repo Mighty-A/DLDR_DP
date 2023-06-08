@@ -50,6 +50,7 @@ class LambdaLayer(nn.Module):
     def forward(self, x):
         return self.lambd(x)
 
+gn_groups = 4
 
 class BasicBlock(nn.Module):
     expansion = 1
@@ -57,8 +58,10 @@ class BasicBlock(nn.Module):
     def __init__(self, in_planes, planes, stride=1, option='A'):
         super(BasicBlock, self).__init__()
         self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.gn1 = nn.GroupNorm(gn_groups, planes, affine=False)
         # self.bn1 = nn.BatchNorm2d(planes)
         self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
+        self.gn2 = nn.GroupNorm(gn_groups, planes, affine=False)
         # self.bn2 = nn.BatchNorm2d(planes)
 
         self.shortcut = nn.Sequential()
@@ -72,12 +75,12 @@ class BasicBlock(nn.Module):
             elif option == 'B':
                 self.shortcut = nn.Sequential(
                      nn.Conv2d(in_planes, self.expansion * planes, kernel_size=1, stride=stride, bias=False),
-                     # nn.BatchNorm2d(self.expansion * planes)
+                     nn.GroupNorm(gn_groups, self.expansion * planes, affine=False)
                 )
 
     def forward(self, x):
-        out = F.relu(self.conv1(x)) # out = F.relu(self.bn1(self.conv1(x)))
-        out = self.conv2(out)       # out = self.bn2(self.conv2(out))
+        out = F.relu(self.gn1(self.conv1(x))) # out = F.relu(self.bn1(self.conv1(x)))
+        out = self.gn2(self.conv2(out))       # out = self.bn2(self.conv2(out))
         out = out + self.shortcut(x)
         out = F.relu(out)
         return out
@@ -89,6 +92,7 @@ class ResNet(nn.Module):
         self.in_planes = 16
 
         self.conv1 = nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1, bias=False)
+        self.gn1 = nn.GroupNorm(gn_groups, 16, affine=False)
         # self.bn1 = nn.BatchNorm2d(16)
         self.layer1 = self._make_layer(block, 16, num_blocks[0], stride=1)
         self.layer2 = self._make_layer(block, 32, num_blocks[1], stride=2)
@@ -107,7 +111,7 @@ class ResNet(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x):
-        out = F.relu(self.conv1(x)) # out = F.relu(self.bn1(self.conv1(x)))
+        out = F.relu(self.gn1(self.conv1(x))) # out = F.relu(self.bn1(self.conv1(x)))
         out = self.layer1(out)
         out = self.layer2(out)
         out = self.layer3(out)
